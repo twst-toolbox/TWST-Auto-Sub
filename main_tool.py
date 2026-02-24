@@ -218,7 +218,7 @@ class App:
 
     def run_process(self):
         try:
-            # 快照参数
+            # 快照参数 (锁定当前滑块设置，防止运行中误触)
             p_rect_d = list(self.rect_d)
             p_rect_c = list(self.rect_c)
             p_rect_b = list(self.rect_b)
@@ -229,15 +229,15 @@ class App:
             cap = cv2.VideoCapture(self.video_path)
             subs = []
             
-            # 状态机
+            # --- 状态机变量 ---
             d_speaking = False
             d_start = 0
             d_peak = 0.0
-            # 记录最佳OCR帧：在密度最高的时候抓图
-            d_best_frame = None
-            d_max_density = 0.0
             
-            # 选项逻辑暂略，专注于对话
+            # 【关键新增】记录这句话“最完美”的一帧
+            d_best_frame = None
+            d_max_density_in_sentence = 0.0
+            
             last_dil = None
             kernel = np.ones((3,3), np.uint8)
             
@@ -254,10 +254,19 @@ class App:
                 x,y,w,h = p_rect_d
                 if w==0 or h==0: continue
                 
-                roi_gray = cv2.cvtColor(frame[y:y+h, x:x+w], cv2.COLOR_BGR2GRAY)
-                _, binary = cv2.threshold(roi_gray, p_bin, 255, cv2.THRESH_BINARY_INV) # TWST是黑字，用INV
-                dilated = cv2.dilate(binary, kernel, iterations=1)
+                # 裁剪出对话框区域
+                roi = frame[y:y+h, x:x+w]
                 
+                # 图像处理
+                roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                # TWST/18Trip 白字黑字逻辑不同，这里假设用通用的阈值处理
+                # 如果是18Trip(白字)，用 THRESH_BINARY；如果是TWST(黑字)，用 THRESH_BINARY_INV
+                # 这里默认用 INV (TWST模式)，如果你主要跑18T，可以在界面加个开关切换模式
+                # 暂且用 INV (黑字模式) 演示，或者你可以根据亮度自动判断
+                # 为了通用，这里假设你已经调整好了滑块能把字抠出来
+                _, binary = cv2.threshold(roi_gray, p_bin, 255, cv2.THRESH_BINARY_INV)
+                
+                dilated = cv2.dilate(binary, kernel, iterations=1)
                 density = cv2.countNonZero(dilated) / (w * h)
                 
                 # 突变检测
@@ -269,24 +278,35 @@ class App:
                 
                 # 2. 状态判断
                 if not d_speaking:
+                    # === 开始说话 ===
                     if density > 0.005:
                         d_speaking = True
                         d_start = idx
                         d_peak = density
-                        # 重置OCR缓存
-                        d_max_density = density
-                        d_best_frame = frame[y:y+h, x:x+w].copy()
+                        
+                        # 初始化最佳帧：刚开始说话，当前帧就是最佳
+                        d_max_density_in_sentence = density
+                        d_best_frame = roi.copy() 
                 else:
+                    # === 说话中 ===
                     if density > d_peak: d_peak = density
                     
-                    # 更新最佳OCR帧：找字最多、最清晰的一帧
-                    if density > d_max_density:
-                        d_max_density = density
-                        d_best_frame = frame[y:y+h, x:x+w].copy()
+                    # 【核心逻辑】更新最佳帧
+                    # 如果当前帧的字数比之前记录的还多，或者差不多多但画面更稳定
+                    # 我们就认为当前帧是更好的OCR素材
+                    # (加 0.001 的缓冲是为了防止微小抖动频繁更新)
+                    if density > d_max_density_in_sentence + 0.001:
+                        d_max_density_in_sentence = density
+                        d_best_frame = roi.copy() # 必须用 copy() 存入内存
                     
+                    # === 结束判定 ===
                     should_cut = False
+                    
+                    # 条件1: 没字了
                     if density < 0.003: should_cut = True
+                    # 条件2: 字突然变少 (峰值回落)
                     elif density < (d_peak * 0.4) and d_peak > 0.02: should_cut = True
+                    # 条件3: 字的形状突变 (防连读)
                     elif diff_score > p_diff and (idx - d_start)/self.fps > 0.2: should_cut = True
                     
                     if should_cut:
@@ -296,25 +316,32 @@ class App:
                             et = datetime.timedelta(seconds=idx/self.fps)
                             
                             content = f"Line {len(subs)+1}"
-                            # === 触发 OCR ===
+                            
+                            # === 触发 OCR (使用缓存的最佳帧) ===
                             if do_ocr and d_best_frame is not None:
+                                # 注意：OCR很耗时，这里是单线程会卡顿界面
+                                # 但为了数据准确，必须等OCR完成
                                 text = self.processor.ocr_image(d_best_frame)
                                 if text.strip(): content = text.strip()
                             
                             subs.append(srt.Subtitle(index=len(subs)+1, start=st, end=et, content=content))
                         
-                        # 连读处理
+                        # 连读处理：如果切断时屏幕上还有字，说明是连读
                         if density > 0.005:
                             d_speaking = True
                             d_start = idx
                             d_peak = density
-                            d_max_density = density
-                            d_best_frame = frame[y:y+h, x:x+w].copy()
+                            # 重置最佳帧为当前新句子的第一帧
+                            d_max_density_in_sentence = density
+                            d_best_frame = roi.copy()
                         else:
                             d_speaking = False
             
-            # 保存
-            srt_path = os.path.splitext(self.video_path)[0] + "_OCR.srt"
+            # 保存 SRT
+            base_name = os.path.splitext(self.video_path)[0]
+            suffix = "_OCR.srt" if do_ocr else ".srt"
+            srt_path = base_name + suffix
+            
             with open(srt_path, "w", encoding="utf-8") as f:
                 f.write(srt.compose(subs))
             
