@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 2. 打包 (不指定输出名，让它默认生成 main_tool.exe，防止路径错误)
+      # 2. 打包
       - name: Build with Nuitka
         uses: Nuitka/Nuitka-Action@main
         with:
@@ -39,9 +39,7 @@ jobs:
           enable-plugins: tk-inter
           disable-console: true
 
-      # 3. 【关键修复】手动改名
-      # 我们自己动手把生成的 main_tool.exe 改成带日期的名字
-      # 并在根目录和 build 目录里都找找，找到谁就改谁
+      # 3. 【修复点】修正 PowerShell 语法 (elif -> elseif)
       - name: Rename Output
         run: |
           $NewName = "TWST_Auto_Tool_v${{ env.TODAY }}.exe"
@@ -49,24 +47,21 @@ jobs:
             Move-Item "build/main_tool.exe" $NewName 
             Write-Host "Found in build folder, renamed to $NewName"
           }
-          elif (Test-Path "main_tool.exe") { 
+          elseif (Test-Path "main_tool.exe") { 
             Rename-Item "main_tool.exe" $NewName 
             Write-Host "Found in root folder, renamed to $NewName"
           }
           else {
             Write-Host "Error: Could not find main_tool.exe"
-            Get-ChildItem -Recurse *.exe # 列出所有exe帮我们找原因
+            Get-ChildItem -Recurse *.exe 
           }
 
-      # 4. 发布 (使用通配符，只要是exe全上传)
+      # 4. 发布
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: github.event_name != 'pull_request'
         with:
-          # 【重点】使用 **/*.exe 通配符
-          # 意思是：不管在哪个文件夹，只要是 exe 就给我上传！
           files: "**/*.exe"
-          
           tag_name: v${{ env.TODAY }}-${{ github.run_number }}
           name: "TWST Tool [${{ env.TODAY }}]"
           body: |
