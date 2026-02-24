@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 1. 生成日期版本号 (例如: 2025.06.15)
+      # 1. 生成日期变量
       - name: Get Date
         id: date
         run: echo "TODAY=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
@@ -30,29 +30,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 2. 使用 Nuitka 打包 (参数已修正)
+      # 2. 打包 (不指定输出名，让它默认生成 main_tool.exe，防止路径错误)
       - name: Build with Nuitka
         uses: Nuitka/Nuitka-Action@main
         with:
           script-name: main_tool.py
-          # 【修正】参数名改为 output-file，并加上 .exe 后缀
-          output-file: TWST_Auto_Tool_v${{ env.TODAY }}.exe
           mode: onefile
           enable-plugins: tk-inter
           disable-console: true
 
-      # 3. 发布到 Release
+      # 3. 【关键修复】手动改名
+      # 我们自己动手把生成的 main_tool.exe 改成带日期的名字
+      # 并在根目录和 build 目录里都找找，找到谁就改谁
+      - name: Rename Output
+        run: |
+          $NewName = "TWST_Auto_Tool_v${{ env.TODAY }}.exe"
+          if (Test-Path "build/main_tool.exe") { 
+            Move-Item "build/main_tool.exe" $NewName 
+            Write-Host "Found in build folder, renamed to $NewName"
+          }
+          elif (Test-Path "main_tool.exe") { 
+            Rename-Item "main_tool.exe" $NewName 
+            Write-Host "Found in root folder, renamed to $NewName"
+          }
+          else {
+            Write-Host "Error: Could not find main_tool.exe"
+            Get-ChildItem -Recurse *.exe # 列出所有exe帮我们找原因
+          }
+
+      # 4. 发布 (使用通配符，只要是exe全上传)
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: github.event_name != 'pull_request'
         with:
-          # 【修正】直接寻找刚才命名的 exe 文件
-          files: TWST_Auto_Tool_v${{ env.TODAY }}.exe
+          # 【重点】使用 **/*.exe 通配符
+          # 意思是：不管在哪个文件夹，只要是 exe 就给我上传！
+          files: "**/*.exe"
           
           tag_name: v${{ env.TODAY }}-${{ github.run_number }}
-          name: "[${{ env.TODAY }}] TWST Auto Tool (Build ${{ github.run_number }})"
+          name: "TWST Tool [${{ env.TODAY }}]"
           body: |
-            自动构建版本。
-            - 包含 Windows OCR 原生支持
-            - 集成 TWST/18TRIP 算法
-            - 修复了打包参数错误
+            自动构建版本: ${{ env.TODAY }}
+            包含 Windows OCR 原生支持。
