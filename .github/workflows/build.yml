@@ -29,28 +29,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 【安全升级 1】改用 standalone (文件夹) 模式，极大降低报毒率
+      # 1. 打包 (安全模式)
       - name: Build with Nuitka (Safe Mode)
         uses: Nuitka/Nuitka-Action@main
         with:
-          # 请确保您的代码文件真的叫这个名字！
+          # 【关键修正】这里必须和您仓库里的文件名一模一样！
           script-name: video_ocr.py
-          # 使用 standalone 生成一个包含所有依赖的文件夹，而不是单文件病毒行为
+          
+          # 使用 standalone 模式 (生成文件夹，而非单文件病毒行为)
           mode: standalone
           enable-plugins: tk-inter
           disable-console: true
-          # 伪装成正经软件的元数据
           company-name: "Local Studio"
           product-name: "Video Subtitle Extractor"
           file-version: "1.0.0.0"
 
-      # 【安全升级 2】把生成的安全文件夹打包成 ZIP
+      # 2. 压缩 (把生成的文件夹打包成 ZIP)
       - name: Zip the output
         run: |
-          # Nuitka standalone 会生成 video_ocr.dist 文件夹
-          Compress-Archive -Path build/video_ocr.dist/* -DestinationPath Video_OCR_Extractor_v${{ env.TODAY }}.zip
+          # Nuitka 在 standalone 模式下会生成一个 .dist 文件夹
+          # 文件夹名字通常是 "脚本名.dist"，所以这里是 video_ocr.dist
+          Compress-Archive -Path build/video_ocr.dist -DestinationPath Video_OCR_Extractor_v${{ env.TODAY }}.zip
 
-      # 3. 发布这个 ZIP 包
+      # 3. 发布
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: github.event_name != 'pull_request'
@@ -59,7 +60,9 @@ jobs:
           tag_name: v${{ env.TODAY }}-${{ github.run_number }}
           name: "Video Subtitle Extractor [${{ env.TODAY }}]"
           body: |
-            已转换为安全模式架构 (Standalone)。
-            不再使用高风险的单文件打包机制，可有效避免企业级杀毒软件误报。
+            ✅ 安全版构建 (Standalone Mode)
             
-            使用方法：下载 ZIP -> 解压到一个文件夹 -> 双击里面的 video_ocr.exe 运行。
+            使用方法：
+            1. 下载 ZIP 并解压。
+            2. 进入解压后的文件夹 (video_ocr.dist)。
+            3. 找到 video_ocr.exe 双击运行。
