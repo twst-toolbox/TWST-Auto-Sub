@@ -266,18 +266,23 @@ class App:
     def _save_dialogue(self, subs, d_start, d_end_idx, d_best_frame, sub_index, do_ocr):
         """対話セグメントを確定してリストに追加する共通関数"""
         dur = (d_end_idx - d_start) / self.fps
-        if dur < 0.25:
-            return sub_index  # 短すぎるものは無視
+        if dur < 0.3:
+            return sub_index  # 短すぎるものは無視（0.25→0.3に微調整）
         st = datetime.timedelta(seconds=d_start / self.fps)
         et = datetime.timedelta(seconds=d_end_idx / self.fps)
         content = ""
         if do_ocr and d_best_frame is not None:
             try:
                 text = self.processor.ocr_image(d_best_frame)
-                if text: content = text
+                # ✅ 2文字未満のOCR結果はノイズと判断して無視
+                if text and len(text.strip()) >= 2:
+                    content = text
             except: pass
         if not content:
             content = f"Line {sub_index}"
+        # ✅ 直前エントリと全く同じテキストなら重複追加しない
+        if subs and subs[-1].content == content and content.startswith("Line "):
+            return sub_index  # 「Line N」の連続重複はスキップ
         subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
         self.log(f"✅ [L{sub_index}] 対話: {content[:20]}...")
         return sub_index + 1
@@ -389,6 +394,8 @@ class App:
                     if c_active:
                         sub_index = self._save_choice(subs, c_start, idx, sub_index, do_ocr, p_rect_c, p_bin)
                         c_active = False
+                        # ✅ 選択肢終了後は差分計算をリセット（選択肢前のフレームと比べてしまうのを防ぐ）
+                        last_dil = None
 
                     # ===== Step3: 対話検出（選択肢フレームでないときだけ） =====
                     x, y, w, h = p_rect_d
