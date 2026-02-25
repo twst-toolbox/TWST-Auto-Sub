@@ -263,6 +263,51 @@ class App:
         mean_brightness = cv2.mean(gray_b)[0]
         return mean_brightness >= threshold
 
+    def _save_dialogue(self, subs, d_start, d_end_idx, d_best_frame, sub_index, do_ocr):
+        """対話セグメントを確定してリストに追加する共通関数"""
+        dur = (d_end_idx - d_start) / self.fps
+        if dur < 0.25:
+            return sub_index  # 短すぎるものは無視
+        st = datetime.timedelta(seconds=d_start / self.fps)
+        et = datetime.timedelta(seconds=d_end_idx / self.fps)
+        content = ""
+        if do_ocr and d_best_frame is not None:
+            try:
+                text = self.processor.ocr_image(d_best_frame)
+                if text: content = text
+            except: pass
+        if not content:
+            content = f"Line {sub_index}"
+        subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
+        self.log(f"✅ [L{sub_index}] 対話: {content[:20]}...")
+        return sub_index + 1
+
+    def _save_choice(self, subs, c_start, c_end_idx, sub_index, do_ocr, p_rect_c, p_bin):
+        """選択肢セグメントを確定してリストに追加する共通関数"""
+        dur_c = (c_end_idx - c_start) / self.fps
+        if dur_c < 0.5:
+            return sub_index
+        st = datetime.timedelta(seconds=c_start / self.fps)
+        et = datetime.timedelta(seconds=c_end_idx / self.fps)
+        content = ""
+        if do_ocr:
+            xc, yc, wc, hc = p_rect_c
+            cap2 = cv2.VideoCapture(self.video_path)
+            cap2.set(cv2.CAP_PROP_POS_FRAMES, c_start + 5)
+            ret_c, frame_c = cap2.read()
+            cap2.release()
+            if ret_c:
+                roi_ocr_c = frame_c[yc:yc+hc, xc:xc+wc]
+                text_c = self.processor.ocr_image(roi_ocr_c)
+                if text_c: content = text_c
+        if not content:
+            content = f"[Choice] Line {sub_index}"
+        else:
+            content = f"[選項] {content}"
+        subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
+        self.log(f"🔹 [L{sub_index}] {content[:30]}")
+        return sub_index + 1
+
     def run_process(self):
         try:
             p_rect_d = list(self.rect_d)
@@ -270,26 +315,30 @@ class App:
             p_rect_b = list(self.rect_b)
             p_diff = self.s_diff.get() / 100.0
             p_bin = self.s_bin.get()
-            p_white = self.s_white.get()  # ✅ 白屏阈值
+            p_white = self.s_white.get()
             do_ocr = self.var_ocr.get()
             is_black_text = (self.var_mode.get() == "BLACK")
+            mode = cv2.THRESH_BINARY_INV if is_black_text else cv2.THRESH_BINARY
 
             cap = cv2.VideoCapture(self.video_path)
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             subs = []
 
+            # --- 対話ステート ---
             d_speaking = False
             d_start = 0
             d_peak = 0.0
             d_best_frame = None
             d_max_den = 0.0
+            last_dil = None
 
+            # --- 選択肢ステート ---
             c_active = False
             c_start = 0
 
             sub_index = 1
-            last_dil = None
             kernel = np.ones((3, 3), np.uint8)
+            xc, yc, wc, hc = p_rect_c
 
             idx = 0
             while self.is_processing:
@@ -300,128 +349,101 @@ class App:
                     prog = (idx / total) * 100
                     self.root.after(0, lambda v=prog: self.progress.config(value=v))
 
-                # ✅ 白屏检测：如果红框区域整体发白，跳过本帧的所有检测
+                # ===== 白屏検出: 全フレーム処理をスキップ =====
                 if self.is_white_flash(frame, p_rect_b, p_white):
-                    # 白屏期间如果对话正在进行，强制结束（避免把白屏帧算进去）
                     if d_speaking:
-                        dur = (idx - d_start) / self.fps
-                        if dur > 0.25:
-                            st = datetime.timedelta(seconds=d_start / self.fps)
-                            et = datetime.timedelta(seconds=idx / self.fps)
-                            content = f"Line {sub_index}"
-                            if do_ocr and d_best_frame is not None:
-                                try:
-                                    text = self.processor.ocr_image(d_best_frame)
-                                    if text: content = text
-                                except: pass
-                            subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
-                            self.log(f"✅ [L{sub_index}] 对话(白屏截断): {content[:10]}...")
-                            sub_index += 1
+                        sub_index = self._save_dialogue(subs, d_start, idx, d_best_frame, sub_index, do_ocr)
                         d_speaking = False
                         last_dil = None
+                    if c_active:
+                        sub_index = self._save_choice(subs, c_start, idx, sub_index, do_ocr, p_rect_c, p_bin)
+                        c_active = False
                     idx += 1
-                    continue  # 白屏帧直接跳过
+                    continue
 
-                # ================= 绿框 (对话) 逻辑 =================
-                x, y, w, h = p_rect_d
-                mode = cv2.THRESH_BINARY_INV if is_black_text else cv2.THRESH_BINARY
-                if w > 0 and h > 0:
-                    roi = frame[y:y+h, x:x+w]
-                    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                    _, binary = cv2.threshold(roi_gray, p_bin, 255, mode)
-                    dilated = cv2.dilate(binary, kernel, iterations=1)
-                    density = cv2.countNonZero(dilated) / (w * h)
+                # ===== Step1: 先に選択肢を判定 =====
+                is_choice_frame = False
+                if wc > 0 and hc > 0:
+                    roi_c = frame[yc:yc+hc, xc:xc+wc]
+                    gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
+                    _, bin_c_img = cv2.threshold(gray_c, p_bin, 255, mode)
+                    den_c = cv2.countNonZero(bin_c_img) / (wc * hc)
+                    is_choice_frame = (den_c > 0.1)
 
-                    diff_score = 0.0
-                    if last_dil is not None:
-                        diff_score = cv2.countNonZero(cv2.absdiff(dilated, last_dil)) / (w * h)
-                    last_dil = dilated.copy()
+                # ===== Step2: 相互排他 — 選択肢フレームなら対話を強制終了 =====
+                if is_choice_frame:
+                    # 対話が進行中なら締める
+                    if d_speaking:
+                        sub_index = self._save_dialogue(subs, d_start, idx, d_best_frame, sub_index, do_ocr)
+                        d_speaking = False
+                        last_dil = None
 
-                    if not d_speaking:
-                        if density > 0.005:
-                            d_speaking = True
-                            d_start = idx
-                            d_peak = density
-                            d_max_den = density
-                            d_best_frame = roi.copy()
-                    else:
-                        if density > d_peak: d_peak = density
-                        if density > d_max_den + 0.001:
-                            d_max_den = density
-                            d_best_frame = roi.copy()
+                    # 選択肢ステートマシン
+                    if not c_active:
+                        c_active = True
+                        c_start = idx
+                    # 選択肢継続中は何もしない（終了は次のelseで処理）
 
-                        should_cut = False
-                        if density < 0.002: should_cut = True
-                        elif density < (d_peak * 0.4) and d_peak > 0.02: should_cut = True
-                        elif diff_score > p_diff and (idx - d_start) / self.fps > 0.2: should_cut = True
+                else:
+                    # ===== 選択肢フレームでない → 選択肢が終わったか確認 =====
+                    if c_active:
+                        sub_index = self._save_choice(subs, c_start, idx, sub_index, do_ocr, p_rect_c, p_bin)
+                        c_active = False
 
-                        if should_cut:
-                            dur = (idx - d_start) / self.fps
-                            if dur > 0.25:
-                                st = datetime.timedelta(seconds=d_start / self.fps)
-                                et = datetime.timedelta(seconds=idx / self.fps)
-                                content = f"Line {sub_index}"
-                                if do_ocr and d_best_frame is not None:
-                                    try:
-                                        text = self.processor.ocr_image(d_best_frame)
-                                        if text: content = text
-                                    except: pass
+                    # ===== Step3: 対話検出（選択肢フレームでないときだけ） =====
+                    x, y, w, h = p_rect_d
+                    if w > 0 and h > 0:
+                        roi = frame[y:y+h, x:x+w]
+                        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                        _, binary = cv2.threshold(roi_gray, p_bin, 255, mode)
+                        dilated = cv2.dilate(binary, kernel, iterations=1)
+                        density = cv2.countNonZero(dilated) / (w * h)
 
-                                subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
-                                self.log(f"✅ [L{sub_index}] 对话: {content[:15]}...")
-                                sub_index += 1
+                        diff_score = 0.0
+                        if last_dil is not None:
+                            diff_score = cv2.countNonZero(cv2.absdiff(dilated, last_dil)) / (w * h)
+                        last_dil = dilated.copy()
 
+                        if not d_speaking:
                             if density > 0.005:
                                 d_speaking = True
                                 d_start = idx
                                 d_peak = density
                                 d_max_den = density
                                 d_best_frame = roi.copy()
-                            else:
-                                d_speaking = False
+                        else:
+                            if density > d_peak: d_peak = density
+                            if density > d_max_den + 0.001:
+                                d_max_den = density
+                                d_best_frame = roi.copy()
 
-                # ================= 蓝框 (选项) 逻辑 =================
-                xc, yc, wc, hc = p_rect_c
-                if wc > 0 and hc > 0:
-                    roi_c = frame[yc:yc+hc, xc:xc+wc]
-                    gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
-                    _, bin_c = cv2.threshold(gray_c, p_bin, 255, mode)
-                    den_c = cv2.countNonZero(bin_c) / (wc * hc)
+                            should_cut = False
+                            if density < 0.002: should_cut = True
+                            elif density < (d_peak * 0.4) and d_peak > 0.02: should_cut = True
+                            elif diff_score > p_diff and (idx - d_start) / self.fps > 0.2: should_cut = True
 
-                    is_choice = (den_c > 0.1)
-
-                    if not c_active:
-                        if is_choice:
-                            c_active = True
-                            c_start = idx
-                    else:
-                        if not is_choice:
-                            c_active = False
-                            dur_c = (idx - c_start) / self.fps
-                            if dur_c > 0.5:
-                                st = datetime.timedelta(seconds=c_start / self.fps)
-                                et = datetime.timedelta(seconds=idx / self.fps)
-                                content = f"[Choice] Line {sub_index}"
-
-                                if do_ocr:
-                                    # ✅ 修正：用独立 cap2 读取，避免主循环帧位置漂移
-                                    cap2 = cv2.VideoCapture(self.video_path)
-                                    cap2.set(cv2.CAP_PROP_POS_FRAMES, c_start + 5)
-                                    ret_c, frame_c = cap2.read()
-                                    cap2.release()
-                                    if ret_c:
-                                        roi_ocr_c = frame_c[yc:yc+hc, xc:xc+wc]
-                                        text_c = self.processor.ocr_image(roi_ocr_c)
-                                        if text_c: content = f"[选项] {text_c}"
-
-                                subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
-                                self.log(f"🔹 [L{sub_index}] {content[:20]}")
-                                sub_index += 1
+                            if should_cut:
+                                sub_index = self._save_dialogue(subs, d_start, idx, d_best_frame, sub_index, do_ocr)
+                                if density > 0.005:
+                                    d_speaking = True
+                                    d_start = idx
+                                    d_peak = density
+                                    d_max_den = density
+                                    d_best_frame = roi.copy()
+                                else:
+                                    d_speaking = False
 
                 idx += 1
 
+            # ===== ループ終了後、未確定セグメントを締める =====
+            if d_speaking:
+                self._save_dialogue(subs, d_start, idx, d_best_frame, sub_index, do_ocr)
+            if c_active:
+                self._save_choice(subs, c_start, idx, sub_index, do_ocr, p_rect_c, p_bin)
+
             cap.release()
 
+            # 時系列ソート → 連番振り直し
             subs.sort(key=lambda x: x.start)
             for i, sub in enumerate(subs): sub.index = i + 1
 
