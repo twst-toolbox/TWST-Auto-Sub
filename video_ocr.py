@@ -31,7 +31,7 @@ class VideoProcessor:
                 lang = Language("ja-JP")
                 if OcrEngine.is_language_supported(lang):
                     self.ocr_engine = OcrEngine.try_create_from_language(lang)
-                    self.logger("✅ [系统] Windows OCR (日语) 就绪。")
+                    self.logger("✅[系统] Windows OCR (日语) 就绪。")
                 else:
                     self.logger("⚠️ [系统] OCR 初始化失败：未安装日语语言包。")
             except Exception as e:
@@ -40,7 +40,6 @@ class VideoProcessor:
     async def _run_win_ocr(self, cv2_img):
         if not self.ocr_engine: return ""
         try:
-            # 必须使用 4 通道 BGRA 才能匹配 Windows 的 BGRA8 格式
             bgra_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2BGRA)
             height, width = bgra_img.shape[:2]
 
@@ -58,7 +57,7 @@ class VideoProcessor:
 
             result = await self.ocr_engine.recognize_async(software_bitmap)
             return result.text.replace(" ", "")
-        except Exception as e:
+        except Exception:
             return ""
 
     def ocr_image(self, img):
@@ -72,7 +71,7 @@ class VideoProcessor:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video Subtitle Extractor V10.7 (防碎片+原生OCR版)")
+        self.root.title("Video Subtitle Extractor V10.8 (选项延时快门版)")
         self.root.geometry("1280x900")
 
         self.rect_d =[320, 465, 630, 100]  
@@ -150,15 +149,10 @@ class App:
         self.s_diff.set(3.0)
         self.s_diff.pack(fill=tk.X)
 
-        tk.Label(f_sets, text="文字亮度/灰度阈值:").pack(anchor="w")
+        tk.Label(f_sets, text="文字/边缘 阈值:").pack(anchor="w")
         self.s_bin = tk.Scale(f_sets, from_=50, to=255, orient=tk.HORIZONTAL, command=self.update_preview)
         self.s_bin.set(130)
         self.s_bin.pack(fill=tk.X)
-
-        tk.Label(f_sets, text="白屏过滤阈值(红框):").pack(anchor="w")
-        self.s_white = tk.Scale(f_sets, from_=150, to=255, orient=tk.HORIZONTAL)
-        self.s_white.set(220)
-        self.s_white.pack(fill=tk.X)
 
         f_bot = tk.Frame(self.root)
         f_bot.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
@@ -173,7 +167,7 @@ class App:
         self.sliders = getattr(self, "sliders", {})
         if rid not in self.sliders:
             self.sliders[rid] =[]
-        labels =["X", "Y", "W", "H"]
+        labels = ["X", "Y", "W", "H"]
         for i in range(4):
             tk.Label(f, text=labels[i]).pack(side=tk.LEFT, padx=2)
             s = tk.Scale(f, from_=0, to=2000, orient=tk.HORIZONTAL, command=lambda v, x=i, r=rid: self.on_rect(v, x, r))
@@ -243,17 +237,8 @@ class App:
         self.is_processing = True
         self.btn_run.config(state=tk.DISABLED, text="处理中...")
         self.btn_stop.config(state=tk.NORMAL)
-        self.log("\n🚀 === 开始提取任务 ===")
+        self.log("\n🚀 === V10.8 开始提取 ===")
         threading.Thread(target=self.run_process, daemon=True).start()
-
-    def is_white_flash(self, frame, rect, threshold):
-        xb, yb, wb, hb = rect
-        if wb <= 0 or hb <= 0: return False
-        roi_b = frame[yb:yb+hb, xb:xb+wb]
-        if roi_b.size == 0: return False
-        gray_b = cv2.cvtColor(roi_b, cv2.COLOR_BGR2GRAY)
-        mean_brightness = cv2.mean(gray_b)[0]
-        return mean_brightness >= threshold
 
     def run_process(self):
         try:
@@ -262,18 +247,17 @@ class App:
             p_rect_b = list(self.rect_b)
             p_diff = self.s_diff.get() / 100.0
             p_bin = self.s_bin.get()
-            p_white = self.s_white.get()
             do_ocr = self.var_ocr.get()
             is_twst_mode = (self.var_mode.get() == "BLACK")
             
-            # 【降低底色要求】从130降到90，包容变暗的选项框
-            LOWER_COLOR = np.array([0, 0, 90])
+            LOWER_COLOR = np.array([0, 0, 100]) # 放宽米色底的容忍度
             UPPER_COLOR = np.array([180, 100, 255])
 
             cap = cv2.VideoCapture(self.video_path)
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             subs =[]
 
+            # --- 对话轨道 (绿框) ---
             d_speaking = False
             d_start = 0
             d_peak = 0.0
@@ -281,11 +265,13 @@ class App:
             d_max_den = 0.0
             last_dil = None
 
+            # --- 选项轨道 (蓝框) 延时快门变量 ---
             c_active = False
             c_start = 0
-            c_peak = 0.0
-            c_best_frame = None
-            c_empty_frames = 0 
+            c_duration = 0      # 选项持续了多少帧
+            c_locked = False    # 是否已经拍下了完美静止帧
+            c_best_frame = None # 锁定的完美帧
+            c_empty_frames = 0  # 消失容忍度
 
             kernel = np.ones((3, 3), np.uint8)
             idx = 0
@@ -298,15 +284,10 @@ class App:
                     prog = (idx / total) * 100
                     self.root.after(0, lambda v=prog: self.progress.config(value=v))
 
-                # === 白屏检测 ===
-                if self.is_white_flash(frame, p_rect_b, p_white):
-                    idx += 1
-                    continue
-
                 hsv_full = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 
                 # ========================================================
-                # 🟢 轨道A：对话
+                # 🟢 轨道A：对话 (保留智能缝合逻辑)
                 # ========================================================
                 x, y, w, h = p_rect_d
                 density_d = 0.0
@@ -341,7 +322,7 @@ class App:
                         d_start = idx
                         d_peak = density_d
                         d_max_den = density_d
-                        d_best_frame = roi_d.copy()  # 恢复原版截图
+                        d_best_frame = roi_d.copy()
                 else:
                     if density_d > d_peak: d_peak = density_d
                     if density_d > d_max_den + 0.001:
@@ -349,7 +330,7 @@ class App:
                         d_best_frame = roi_d.copy()
 
                     should_cut = False
-                    if density_d < 0.002: should_cut = True
+                    if density_d < 0.003: should_cut = True
                     elif density_d < (d_peak * 0.4) and d_peak > 0.02: should_cut = True
                     elif diff_score > p_diff and (idx - d_start) / self.fps > 0.2: should_cut = True
 
@@ -358,26 +339,22 @@ class App:
                         if dur > 0.25:
                             st = datetime.timedelta(seconds=d_start / self.fps)
                             et = datetime.timedelta(seconds=idx / self.fps)
-                            
-                            # 【修复点 1】修改占位符名称，方便最后编号
-                            content = "Line [Dialog]" 
+                            content = "Line [Dialog]"
                             
                             if do_ocr and d_best_frame is not None:
                                 try:
                                     text = self.processor.ocr_image(d_best_frame)
-                                    if text and len(text.strip()) >= 2: 
-                                        content = text.strip()
+                                    if text and len(text.strip()) >= 2: content = text.strip()
                                 except: pass
 
-                            # 【修复点 2】智能文本缝合：防碎片化
+                            # 智能文本缝合
                             is_merged = False
                             if len(subs) > 0:
                                 last_sub = subs[-1]
-                                # 如果当前文字和上一句完全相同，且不是占位符，缝合它们
-                                if content != "Line[Dialog]" and content == last_sub.content:
+                                if content != "Line [Dialog]" and content == last_sub.content:
                                     last_sub.end = et
                                     is_merged = True
-                                    self.log(f"🔄 自动缝合闪烁碎片: {content[:10]}...")
+                                    self.log(f"🔄 缝合碎片: {content[:10]}...")
 
                             if not is_merged:
                                 subs.append(srt.Subtitle(index=0, start=st, end=et, content=content))
@@ -393,15 +370,13 @@ class App:
                             d_speaking = False
 
                 # ========================================================
-                # 🔵 轨道B：选项
+                # 🔵 轨道B：选项检测 (蓝框) - 延时快门机制
                 # ========================================================
                 xc, yc, wc, hc = p_rect_c
                 xb, yb, wb, hb = p_rect_b
                 is_choice = False
-                c_score = 0.0
                 
                 if wc > 0 and hc > 0:
-                    roi_c = frame[yc:yc+hc, xc:xc+wc]
                     if is_twst_mode:
                         roi_c_hsv = hsv_full[yc:yc+hc, xc:xc+wc]
                         ratio_c = cv2.countNonZero(cv2.inRange(roi_c_hsv, LOWER_COLOR, UPPER_COLOR)) / (wc * hc)
@@ -411,54 +386,61 @@ class App:
                             roi_b_hsv = hsv_full[yb:yb+hb, xb:xb+wb]
                             ratio_b = cv2.countNonZero(cv2.inRange(roi_b_hsv, LOWER_COLOR, UPPER_COLOR)) / (wb * hb)
                         
+                        # 只要米色底框明显亮起，就认为是选项 (完全无视文字密度，防止动画导致阈值横跳)
                         if (ratio_c > 0.3) and (ratio_c > ratio_b + 0.1):
-                            # 取原始图片的亮度作为辅助判断
-                            gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
-                            _, bin_c = cv2.threshold(gray_c, p_bin, 255, cv2.THRESH_BINARY_INV)
-                            c_score = cv2.countNonZero(bin_c) / (wc * hc)
-                            if c_score > 0.005: 
-                                is_choice = True
+                            is_choice = True
                     else:
+                        # 18TRIP 模式：白字检测
+                        roi_c = frame[yc:yc+hc, xc:xc+wc]
                         gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
-                        _, bin_c_img = cv2.threshold(gray_c, p_bin, 255, cv2.THRESH_BINARY)
-                        c_score = cv2.countNonZero(bin_c_img) / (wc * hc)
-                        if c_score > 0.01:
+                        _, bin_c = cv2.threshold(gray_c, p_bin, 255, cv2.THRESH_BINARY)
+                        if cv2.countNonZero(bin_c) / (wc * hc) > 0.01:
                             is_choice = True
 
                     if not c_active:
                         if is_choice:
+                            # 选项刚刚弹出！
                             c_active = True
                             c_start = idx
-                            c_peak = c_score
                             c_empty_frames = 0
-                            c_best_frame = roi_c.copy()
+                            c_duration = 0
+                            c_locked = False
+                            c_best_frame = None
                     else:
                         if is_choice:
                             c_empty_frames = 0 
-                            if c_score > c_peak:
-                                c_peak = c_score
-                                c_best_frame = roi_c.copy()
+                            c_duration += 1
+                            
+                            # 🚀 延时快门：选项持续了 45帧 (1.5秒) 时，动画绝对停止了
+                            # 此时立刻截取一张原图，锁死！以后再也不更新了。
+                            if c_duration == 45 and not c_locked:
+                                c_best_frame = frame[yc:yc+hc, xc:xc+wc].copy() # 截取彩色原图喂给 Windows OCR
+                                c_locked = True
+                                self.log("📸 [选项] 动画已停止，截取完美画面。")
                         else:
+                            # 选项可能正在消失
                             c_empty_frames += 1
-                            if c_empty_frames > 15:
+                            # 容忍 30 帧 (1秒) 的消失动画/闪烁
+                            if c_empty_frames > 30:
                                 c_active = False
-                                real_end_idx = idx - 15
+                                real_end_idx = idx - 30
                                 dur_c = (real_end_idx - c_start) / self.fps
                                 
-                                if dur_c > 0.5:
+                                if dur_c > 1.0: # 选项存活通常大于1秒
                                     st = datetime.timedelta(seconds=c_start / self.fps)
                                     et = datetime.timedelta(seconds=real_end_idx / self.fps)
                                     content = "Line [Choice]"
                                     
+                                    # 拿着被锁死的完美截图去 OCR
                                     if do_ocr and c_best_frame is not None:
                                         try:
                                             text_c = self.processor.ocr_image(c_best_frame)
                                             if text_c and len(text_c.strip()) >= 2:
-                                                content = f"{text_c.strip()} [Choice]"
+                                                content = f"{text_c.strip()}[Choice]"
                                         except: pass
 
                                     subs.append(srt.Subtitle(index=0, start=st, end=et, content=content))
-                                    self.log(f"🔹 选项: {content[:20]}...")
+                                    self.log(f"🔹 选项结算: {content[:20]}...")
 
                 idx += 1
 
