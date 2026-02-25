@@ -33,14 +33,15 @@ class VideoProcessor:
                     self.ocr_engine = OcrEngine.try_create_from_language(lang)
                     self.logger("✅ [系统] Windows OCR (日语) 就绪。")
                 else:
-                    self.logger("⚠️ [系统] OCR 初始化失败：您的 Windows 可能未安装日语语言包。")
+                    self.logger("⚠️ [系统] OCR 初始化失败：未安装日语语言包。")
             except Exception as e:
                 self.logger(f"❌ [系统] OCR 初始化异常: {e}")
 
     async def _run_win_ocr(self, cv2_img):
-        if not self.ocr_engine: return ""
+        if not self.ocr_engine:
+            return ""
         try:
-            # ✅ 吸收了死对头的神级修复：BGR 转 BGRA (4通道)，并使用 BGRA8 枚举
+            # BGR 转 BGRA (必须4通道才能用 BGRA8 格式)
             bgra_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2BGRA)
             height, width = bgra_img.shape[:2]
 
@@ -59,11 +60,12 @@ class VideoProcessor:
             result = await self.ocr_engine.recognize_async(software_bitmap)
             return result.text.replace(" ", "")
         except Exception as e:
-            self.logger(f"⚠️ [OCR内部错误] {e}")
+            self.logger(f"⚠️[OCR内部错误] {e}")
             return ""
 
     def ocr_image(self, img):
-        if not HAS_WIN_OCR: return ""
+        if not HAS_WIN_OCR:
+            return ""
         try:
             return asyncio.run(self._run_win_ocr(img))
         except Exception:
@@ -73,12 +75,12 @@ class VideoProcessor:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video Subtitle Extractor V10.3 (OCR修复 + V10双轨原味版)")
+        self.root.title("Video Subtitle Extractor V10.4 (完美稳定版)")
         self.root.geometry("1280x900")
 
-        self.rect_d = [320, 465, 630, 100]  # 对话(绿)
-        self.rect_c =[430, 170, 450, 90]   # 选项(蓝)
-        self.rect_b =[100, 100, 150, 150]  # 背景(红)
+        self.rect_d =[320, 465, 630, 100]  
+        self.rect_c =[430, 170, 450, 90]   
+        self.rect_b = [100, 100, 150, 150]  
 
         self.video_path = ""
         self.cap = None
@@ -113,7 +115,8 @@ class App:
         self.var_ocr = tk.BooleanVar(value=False)
         cb_ocr = tk.Checkbutton(f_top2, text="启用 OCR", variable=self.var_ocr, font=("微软雅黑", 10, "bold"), fg="purple")
         cb_ocr.pack(side=tk.LEFT, padx=20)
-        if not HAS_WIN_OCR: cb_ocr.config(state=tk.DISABLED, text="OCR不可用(缺winsdk)")
+        if not HAS_WIN_OCR:
+            cb_ocr.config(state=tk.DISABLED, text="OCR不可用(缺winsdk)")
 
         self.btn_run = tk.Button(f_top2, text="▶️ 开始处理", command=self.start_task, bg="#ddffdd", font=("微软雅黑", 11, "bold"))
         self.btn_run.pack(side=tk.RIGHT)
@@ -156,11 +159,6 @@ class App:
         self.s_bin.set(130)
         self.s_bin.pack(fill=tk.X)
 
-        tk.Label(f_sets, text="白屏过滤阈值(红框):").pack(anchor="w")
-        self.s_white = tk.Scale(f_sets, from_=150, to=255, orient=tk.HORIZONTAL)
-        self.s_white.set(220)
-        self.s_white.pack(fill=tk.X)
-
         f_bot = tk.Frame(self.root)
         f_bot.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
         self.s_time = tk.Scale(f_bot, from_=0, to=100, orient=tk.HORIZONTAL, showvalue=0, command=self.on_seek)
@@ -172,7 +170,8 @@ class App:
         f = tk.Frame(nb)
         nb.add(f, text=title)
         self.sliders = getattr(self, "sliders", {})
-        if rid not in self.sliders: self.sliders[rid] = []
+        if rid not in self.sliders:
+            self.sliders[rid] = []
         labels =["X", "Y", "W", "H"]
         for i in range(4):
             tk.Label(f, text=labels[i]).pack(side=tk.LEFT, padx=2)
@@ -183,14 +182,18 @@ class App:
 
     def on_rect(self, val, idx, rid):
         val = int(float(val))
-        if rid == 0: self.rect_d[idx] = val
-        elif rid == 1: self.rect_c[idx] = val
-        elif rid == 2: self.rect_b[idx] = val
+        if rid == 0:
+            self.rect_d[idx] = val
+        elif rid == 1:
+            self.rect_c[idx] = val
+        elif rid == 2:
+            self.rect_b[idx] = val
         self.update_preview()
 
     def load_video(self):
         path = filedialog.askopenfilename()
-        if not path: return
+        if not path:
+            return
         self.video_path = path
         self.cap = cv2.VideoCapture(path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -200,14 +203,16 @@ class App:
         self.s_time.config(to=self.total_frames)
         self.lbl_info.config(text=f"{os.path.basename(path)} ({w}x{h})")
         for slist in self.sliders.values():
-            for s in slist: s.config(to=max(w, h))
+            for s in slist:
+                s.config(to=max(w, h))
         self.update_preview()
 
     def on_seek(self, val):
         self.update_preview()
 
     def update_preview(self, _=None):
-        if not self.cap or self.is_processing: return
+        if not self.cap or self.is_processing:
+            return
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(self.s_time.get()))
         ret, frame = self.cap.read()
         if ret:
@@ -229,7 +234,8 @@ class App:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame)
             cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-            if cw > 1: img.thumbnail((cw, ch))
+            if cw > 1:
+                img.thumbnail((cw, ch))
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.create_image(cw//2, ch//2, image=self.photo, anchor=tk.CENTER)
 
@@ -238,21 +244,13 @@ class App:
         self.log("⚠️ 停止...")
 
     def start_task(self):
-        if not self.video_path: return
+        if not self.video_path:
+            return
         self.is_processing = True
         self.btn_run.config(state=tk.DISABLED, text="处理中...")
         self.btn_stop.config(state=tk.NORMAL)
         self.log("\n🚀 === 开始任务 ===")
         threading.Thread(target=self.run_process, daemon=True).start()
-
-    def is_white_flash(self, frame, rect, threshold):
-        xb, yb, wb, hb = rect
-        if wb <= 0 or hb <= 0: return False
-        roi_b = frame[yb:yb+hb, xb:xb+wb]
-        if roi_b.size == 0: return False
-        gray_b = cv2.cvtColor(roi_b, cv2.COLOR_BGR2GRAY)
-        mean_brightness = cv2.mean(gray_b)[0]
-        return mean_brightness >= threshold
 
     def run_process(self):
         try:
@@ -261,7 +259,6 @@ class App:
             p_rect_b = list(self.rect_b)
             p_diff = self.s_diff.get() / 100.0
             p_bin = self.s_bin.get()
-            p_white = self.s_white.get()
             do_ocr = self.var_ocr.get()
             is_black_text = (self.var_mode.get() == "BLACK")
             mode = cv2.THRESH_BINARY_INV if is_black_text else cv2.THRESH_BINARY
@@ -270,55 +267,33 @@ class App:
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             subs =[]
 
-            # --- 对话轨道变量 ---
+            # --- 状态变量 ---
             d_speaking = False
             d_start = 0
             d_peak = 0.0
             d_best_frame = None
             d_max_den = 0.0
-            last_dil = None
-
-            # --- 选项轨道变量 ---
+            
             c_active = False
             c_start = 0
             c_peak = 0.0
             c_best_frame = None
 
             sub_index = 1
+            last_dil = None
             kernel = np.ones((3, 3), np.uint8)
 
             idx = 0
             while self.is_processing:
                 ret, frame = cap.read()
-                if not ret: break
+                if not ret:
+                    break
 
                 if idx % 100 == 0:
                     prog = (idx / total) * 100
                     self.root.after(0, lambda v=prog: self.progress.config(value=v))
 
-                # ================= 💥 白屏检测 =================
-                # 如果遇到全屏白光，就结算对话，但跳过这一帧不记录
-                if self.is_white_flash(frame, p_rect_b, p_white):
-                    if d_speaking:
-                        dur = (idx - d_start) / self.fps
-                        if dur > 0.25:
-                            st = datetime.timedelta(seconds=d_start/self.fps)
-                            et = datetime.timedelta(seconds=idx/self.fps)
-                            content = f"Line {sub_index}"
-                            if do_ocr and d_best_frame is not None:
-                                try:
-                                    text = self.processor.ocr_image(d_best_frame)
-                                    if text and len(text.strip()) >= 2: content = text.strip()
-                                except: pass
-                            subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
-                            self.log(f"✅ [L{sub_index}] 对话(闪光中断): {content[:15]}...")
-                            sub_index += 1
-                        d_speaking = False
-                        last_dil = None
-                    idx += 1
-                    continue
-
-                # ================= 🟢 轨道A：对话 =================
+                # ================= 🟢 对话轨道 (绿框) =================
                 x, y, w, h = p_rect_d
                 if w > 0 and h > 0:
                     roi_d = frame[y:y+h, x:x+w]
@@ -340,22 +315,111 @@ class App:
                             d_max_den = density
                             d_best_frame = roi_d.copy()
                     else:
-                        if density > d_peak: d_peak = density
+                        if density > d_peak:
+                            d_peak = density
                         if density > d_max_den + 0.001:
                             d_max_den = density
                             d_best_frame = roi_d.copy()
 
                         should_cut = False
-                        if density < 0.002: should_cut = True
-                        elif density < (d_peak * 0.4) and d_peak > 0.02: should_cut = True
-                        elif diff_score > p_diff and (idx - d_start) / self.fps > 0.2: should_cut = True
+                        if density < 0.002:
+                            should_cut = True
+                        elif density < (d_peak * 0.4) and d_peak > 0.02:
+                            should_cut = True
+                        elif diff_score > p_diff and (idx - d_start) / self.fps > 0.2:
+                            should_cut = True
 
                         if should_cut:
                             dur = (idx - d_start) / self.fps
                             if dur > 0.25:
-                                st = datetime.timedelta(seconds=d_start/self.fps)
-                                et = datetime.timedelta(seconds=idx/self.fps)
+                                st = datetime.timedelta(seconds=d_start / self.fps)
+                                et = datetime.timedelta(seconds=idx / self.fps)
                                 content = f"Line {sub_index}"
                                 
                                 if do_ocr and d_best_frame is not None:
                                     try:
+                                        text = self.processor.ocr_image(d_best_frame)
+                                        if text and len(text.strip()) >= 2:
+                                            content = text.strip()
+                                    except Exception:
+                                        pass
+                                
+                                subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
+                                self.log(f"✅ [L{sub_index}] 对话: {content[:15]}...")
+                                sub_index += 1
+
+                            if density > 0.005:
+                                d_speaking = True
+                                d_start = idx
+                                d_peak = density
+                                d_max_den = density
+                                d_best_frame = roi_d.copy()
+                            else:
+                                d_speaking = False
+
+                # ================= 🔵 选项轨道 (蓝框) =================
+                xc, yc, wc, hc = p_rect_c
+                if wc > 0 and hc > 0:
+                    roi_c = frame[yc:yc+hc, xc:xc+wc]
+                    gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
+                    _, bin_c_img = cv2.threshold(gray_c, p_bin, 255, mode)
+                    den_c = cv2.countNonZero(bin_c_img) / (wc * hc)
+                    
+                    is_choice = (den_c > 0.1)
+
+                    if not c_active:
+                        if is_choice:
+                            c_active = True
+                            c_start = idx
+                            c_peak = den_c
+                            c_best_frame = roi_c.copy()
+                    else:
+                        if is_choice:
+                            if den_c > c_peak:
+                                c_peak = den_c
+                                c_best_frame = roi_c.copy()
+                        else:
+                            c_active = False
+                            dur_c = (idx - c_start) / self.fps
+                            if dur_c > 0.5:
+                                st = datetime.timedelta(seconds=c_start / self.fps)
+                                et = datetime.timedelta(seconds=idx / self.fps)
+                                content = f"Line {sub_index} [Choice]"
+                                
+                                if do_ocr and c_best_frame is not None:
+                                    try:
+                                        text_c = self.processor.ocr_image(c_best_frame)
+                                        if text_c and len(text_c.strip()) >= 2:
+                                            content = f"{text_c.strip()} [Choice]"
+                                    except Exception:
+                                        pass
+
+                                subs.append(srt.Subtitle(index=sub_index, start=st, end=et, content=content))
+                                self.log(f"🔹 [L{sub_index}] 选项: {content[:15]}...")
+                                sub_index += 1
+
+                idx += 1
+
+            cap.release()
+
+            subs.sort(key=lambda x: x.start)
+            for i, sub in enumerate(subs):
+                sub.index = i + 1
+
+            srt_path = os.path.splitext(self.video_path)[0] + ("_OCR.srt" if do_ocr else ".srt")
+            with open(srt_path, "w", encoding="utf-8-sig") as f:
+                f.write(srt.compose(subs))
+
+            self.root.after(0, lambda: messagebox.showinfo("完成", f"文件已保存:\n{srt_path}"))
+
+        except Exception as e:
+            self.log(f"❌ 错误: {e}")
+            print(traceback.format_exc())
+        finally:
+            self.is_processing = False
+            self.root.after(0, lambda: self.btn_run.config(state=tk.NORMAL, text="▶️ 开始处理"))
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
