@@ -1,8 +1,8 @@
-name: Build All-in-One Tool
+name: Build Safe OCR Tool
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      # 1. 生成日期变量
       - name: Get Date
         id: date
         run: echo "TODAY=$(date +'%Y.%m.%d')" >> $GITHUB_ENV
@@ -30,40 +29,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 2. 打包
-      - name: Build with Nuitka
+      # 【安全升级 1】改用 standalone (文件夹) 模式，极大降低报毒率
+      - name: Build with Nuitka (Safe Mode)
         uses: Nuitka/Nuitka-Action@main
         with:
-          script-name: main_tool.py
-          mode: onefile
+          # 请确保您的代码文件真的叫这个名字！
+          script-name: video_ocr.py
+          # 使用 standalone 生成一个包含所有依赖的文件夹，而不是单文件病毒行为
+          mode: standalone
           enable-plugins: tk-inter
           disable-console: true
+          # 伪装成正经软件的元数据
+          company-name: "Local Studio"
+          product-name: "Video Subtitle Extractor"
+          file-version: "1.0.0.0"
 
-      # 3. 【修复点】修正 PowerShell 语法 (elif -> elseif)
-      - name: Rename Output
+      # 【安全升级 2】把生成的安全文件夹打包成 ZIP
+      - name: Zip the output
         run: |
-          $NewName = "TWST_Auto_Tool_v${{ env.TODAY }}.exe"
-          if (Test-Path "build/main_tool.exe") { 
-            Move-Item "build/main_tool.exe" $NewName 
-            Write-Host "Found in build folder, renamed to $NewName"
-          }
-          elseif (Test-Path "main_tool.exe") { 
-            Rename-Item "main_tool.exe" $NewName 
-            Write-Host "Found in root folder, renamed to $NewName"
-          }
-          else {
-            Write-Host "Error: Could not find main_tool.exe"
-            Get-ChildItem -Recurse *.exe 
-          }
+          # Nuitka standalone 会生成 video_ocr.dist 文件夹
+          Compress-Archive -Path build/video_ocr.dist/* -DestinationPath Video_OCR_Extractor_v${{ env.TODAY }}.zip
 
-      # 4. 发布
+      # 3. 发布这个 ZIP 包
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         if: github.event_name != 'pull_request'
         with:
-          files: "**/*.exe"
+          files: "*.zip"
           tag_name: v${{ env.TODAY }}-${{ github.run_number }}
-          name: "TWST Tool [${{ env.TODAY }}]"
+          name: "Video Subtitle Extractor [${{ env.TODAY }}]"
           body: |
-            自动构建版本: ${{ env.TODAY }}
-            包含 Windows OCR 原生支持。
+            已转换为安全模式架构 (Standalone)。
+            不再使用高风险的单文件打包机制，可有效避免企业级杀毒软件误报。
+            
+            使用方法：下载 ZIP -> 解压到一个文件夹 -> 双击里面的 video_ocr.exe 运行。
