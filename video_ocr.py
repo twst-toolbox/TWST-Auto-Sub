@@ -38,9 +38,10 @@ class VideoProcessor:
                 self.logger(f"❌ [系统] OCR 初始化异常: {e}")
 
     async def _run_win_ocr(self, cv2_img):
-        if not self.ocr_engine: return ""
+        if not self.ocr_engine:
+            return ""
         try:
-            # 使用 4 通道 BGRA 适配 Windows OCR
+            # BGR 转 BGRA (必须4通道才能用 BGRA8 格式)
             bgra_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2BGRA)
             height, width = bgra_img.shape[:2]
 
@@ -58,11 +59,12 @@ class VideoProcessor:
 
             result = await self.ocr_engine.recognize_async(software_bitmap)
             return result.text.replace(" ", "")
-        except Exception:
+        except Exception as e:
             return ""
 
     def ocr_image(self, img):
-        if not HAS_WIN_OCR: return ""
+        if not HAS_WIN_OCR:
+            return ""
         try:
             return asyncio.run(self._run_win_ocr(img))
         except Exception:
@@ -72,12 +74,12 @@ class VideoProcessor:
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("Video Subtitle Extractor V11.1 (完美除虫版)")
+        self.root.title("Video Subtitle Extractor V12 (选项静止侦测版)")
         self.root.geometry("1280x900")
 
-        self.rect_d = [320, 465, 630, 100]  
+        self.rect_d =[320, 465, 630, 100]  
         self.rect_c =[430, 170, 450, 90]   
-        self.rect_b =[100, 100, 150, 150]  
+        self.rect_b = [100, 100, 150, 150]  
 
         self.video_path = ""
         self.cap = None
@@ -112,7 +114,8 @@ class App:
         self.var_ocr = tk.BooleanVar(value=False)
         cb_ocr = tk.Checkbutton(f_top2, text="启用 OCR", variable=self.var_ocr, font=("微软雅黑", 10, "bold"), fg="purple")
         cb_ocr.pack(side=tk.LEFT, padx=20)
-        if not HAS_WIN_OCR: cb_ocr.config(state=tk.DISABLED, text="OCR不可用")
+        if not HAS_WIN_OCR:
+            cb_ocr.config(state=tk.DISABLED, text="OCR不可用")
 
         self.btn_run = tk.Button(f_top2, text="▶️ 开始处理", command=self.start_task, bg="#ddffdd", font=("微软雅黑", 11, "bold"))
         self.btn_run.pack(side=tk.RIGHT)
@@ -167,8 +170,8 @@ class App:
         nb.add(f, text=title)
         self.sliders = getattr(self, "sliders", {})
         if rid not in self.sliders:
-            self.sliders[rid] = []
-        labels =["X", "Y", "W", "H"]
+            self.sliders[rid] =[]
+        labels = ["X", "Y", "W", "H"]
         for i in range(4):
             tk.Label(f, text=labels[i]).pack(side=tk.LEFT, padx=2)
             s = tk.Scale(f, from_=0, to=2000, orient=tk.HORIZONTAL, command=lambda v, x=i, r=rid: self.on_rect(v, x, r))
@@ -178,14 +181,18 @@ class App:
 
     def on_rect(self, val, idx, rid):
         val = int(float(val))
-        if rid == 0: self.rect_d[idx] = val
-        elif rid == 1: self.rect_c[idx] = val
-        elif rid == 2: self.rect_b[idx] = val
+        if rid == 0:
+            self.rect_d[idx] = val
+        elif rid == 1:
+            self.rect_c[idx] = val
+        elif rid == 2:
+            self.rect_b[idx] = val
         self.update_preview()
 
     def load_video(self):
         path = filedialog.askopenfilename()
-        if not path: return
+        if not path:
+            return
         self.video_path = path
         self.cap = cv2.VideoCapture(path)
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -203,7 +210,8 @@ class App:
         self.update_preview()
 
     def update_preview(self, _=None):
-        if not self.cap or self.is_processing: return
+        if not self.cap or self.is_processing:
+            return
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(self.s_time.get()))
         ret, frame = self.cap.read()
         if ret:
@@ -225,20 +233,22 @@ class App:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame)
             cw, ch = self.canvas.winfo_width(), self.canvas.winfo_height()
-            if cw > 1: img.thumbnail((cw, ch))
+            if cw > 1:
+                img.thumbnail((cw, ch))
             self.photo = ImageTk.PhotoImage(img)
             self.canvas.create_image(cw//2, ch//2, image=self.photo, anchor=tk.CENTER)
 
     def stop_task(self):
         self.is_processing = False
-        self.log("⚠️ 手动终止...")
+        self.log("⚠️ 收到停止指令，正在安全退出...")
 
     def start_task(self):
-        if not self.video_path: return
+        if not self.video_path:
+            return
         self.is_processing = True
         self.btn_run.config(state=tk.DISABLED, text="处理中...")
         self.btn_stop.config(state=tk.NORMAL)
-        self.log("\n🚀 === V11.1 开始提取 ===")
+        self.log("\n🚀 === V12 开始提取 ===")
         threading.Thread(target=self.run_process, daemon=True).start()
 
     def run_process(self):
@@ -258,7 +268,7 @@ class App:
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             subs =[]
 
-            # --- 对话轨道 ---
+            # --- 对话轨道变量 ---
             d_speaking = False
             d_start = 0
             d_peak = 0.0
@@ -266,13 +276,18 @@ class App:
             d_max_den = 0.0
             last_dil_d = None
 
-            # --- 选项轨道 ---
+            # --- 选项轨道变量 (V12 绝对静止检测器) ---
             c_active = False
             c_start = 0
-            c_duration = 0
-            c_locked = False
-            c_best_frame = None
             c_empty_frames = 0
+            
+            # 快门机制相关
+            c_locked = False        # 是否已经拍到了完美静止的相片
+            c_best_frame = None     # 锁死的最完美截图
+            c_fallback_frame = None # 保底截图（防止手速太快没来得及静止）
+            c_max_den = 0.0         # 用于保底
+            c_still_frames = 0      # 静止计数器
+            last_dil_c = None
 
             kernel = np.ones((3, 3), np.uint8)
             idx = 0
@@ -288,12 +303,12 @@ class App:
                 hsv_full = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 
                 # ========================================================
-                # 🟢 轨道A：对话
+                # 🟢 轨道A：对话 (保留智能缝合逻辑)
                 # ========================================================
                 x, y, w, h = p_rect_d
                 density_d = 0.0
                 diff_score_d = 0.0
-                dilated = None # ✅ 修复点：每一帧开头都重置 dilated，防止死对头指出的局部变量陷阱
+                dilated_d = None
                 
                 if w > 0 and h > 0:
                     roi_d = frame[y:y+h, x:x+w]
@@ -303,19 +318,18 @@ class App:
                         if ratio_d > 0.4:
                             roi_gray = cv2.cvtColor(roi_d, cv2.COLOR_BGR2GRAY)
                             _, binary = cv2.threshold(roi_gray, 150, 255, cv2.THRESH_BINARY_INV)
-                            dilated = cv2.dilate(binary, kernel, iterations=1)
-                            density_d = cv2.countNonZero(dilated) / (w * h)
+                            dilated_d = cv2.dilate(binary, kernel, iterations=1)
+                            density_d = cv2.countNonZero(dilated_d) / (w * h)
                     else:
                         roi_gray = cv2.cvtColor(roi_d, cv2.COLOR_BGR2GRAY)
                         _, binary = cv2.threshold(roi_gray, p_bin, 255, cv2.THRESH_BINARY)
-                        dilated = cv2.dilate(binary, kernel, iterations=1)
-                        density_d = cv2.countNonZero(dilated) / (w * h)
+                        dilated_d = cv2.dilate(binary, kernel, iterations=1)
+                        density_d = cv2.countNonZero(dilated_d) / (w * h)
 
-                    # ✅ 修复点：使用 is not None 判断，安全且准确
-                    if dilated is not None:
+                    if dilated_d is not None:
                         if last_dil_d is not None:
-                            diff_score_d = cv2.countNonZero(cv2.absdiff(dilated, last_dil_d)) / (w * h)
-                        last_dil_d = dilated.copy()
+                            diff_score_d = cv2.countNonZero(cv2.absdiff(dilated_d, last_dil_d)) / (w * h)
+                        last_dil_d = dilated_d.copy()
                     else:
                         last_dil_d = None
 
@@ -350,6 +364,7 @@ class App:
                                     if text and len(text.strip()) >= 2: content = text.strip()
                                 except: pass
 
+                            # 智能缝合防重影
                             is_merged = False
                             if len(subs) > 0:
                                 last_sub = subs[-1]
@@ -372,16 +387,20 @@ class App:
                             d_speaking = False
 
                 # ========================================================
-                # 🔵 轨道B：选项
+                # 🔵 轨道B：选项 (V12核心: 绝对静止侦测)
                 # ========================================================
                 xc, yc, wc, hc = p_rect_c
                 xb, yb, wb, hb = p_rect_b
                 is_choice = False
+                density_c = 0.0
+                diff_score_c = 0.0
+                dilated_c = None
                 
                 if wc > 0 and hc > 0:
                     roi_c = frame[yc:yc+hc, xc:xc+wc]
                     
                     if is_twst_mode:
+                        # 依旧使用米色底框定位
                         roi_c_hsv = hsv_full[yc:yc+hc, xc:xc+wc]
                         ratio_c = cv2.countNonZero(cv2.inRange(roi_c_hsv, LOWER_COLOR, UPPER_COLOR)) / (wc * hc)
                         
@@ -391,62 +410,97 @@ class App:
                             ratio_b = cv2.countNonZero(cv2.inRange(roi_b_hsv, LOWER_COLOR, UPPER_COLOR)) / (wb * hb)
                         
                         if (ratio_c > 0.4) and (ratio_c > ratio_b + 0.1):
-                            is_choice = True
+                            gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
+                            _, bin_c = cv2.threshold(gray_c, 150, 255, cv2.THRESH_BINARY_INV)
+                            dilated_c = cv2.dilate(bin_c, kernel, iterations=1)
+                            density_c = cv2.countNonZero(dilated_c) / (wc * hc)
+                            if density_c > 0.005: 
+                                is_choice = True
                     else:
                         gray_c = cv2.cvtColor(roi_c, cv2.COLOR_BGR2GRAY)
                         _, bin_c = cv2.threshold(gray_c, p_bin, 255, cv2.THRESH_BINARY)
-                        if cv2.countNonZero(bin_c) / (wc * hc) > 0.01:
+                        dilated_c = cv2.dilate(bin_c, kernel, iterations=1)
+                        density_c = cv2.countNonZero(dilated_c) / (wc * hc)
+                        if density_c > 0.01:
                             is_choice = True
 
-                    if not c_active:
-                        if is_choice:
-                            c_active = True
-                            c_start = idx
-                            c_duration = 0
-                            c_empty_frames = 0
-                            c_locked = False
-                            c_best_frame = None
+                    if dilated_c is not None:
+                        if last_dil_c is not None:
+                            diff_score_c = cv2.countNonZero(cv2.absdiff(dilated_c, last_dil_c)) / (wc * hc)
+                        last_dil_c = dilated_c.copy()
                     else:
-                        if is_choice:
-                            c_empty_frames = 0 
-                            c_duration += 1
+                        last_dil_c = None
+
+                # 选项状态机
+                if not c_active:
+                    if is_choice:
+                        # 选项刚弹出来
+                        c_active = True
+                        c_start = idx
+                        c_empty_frames = 0
+                        c_locked = False
+                        c_best_frame = None
+                        c_still_frames = 0
+                        c_max_den = density_c
+                        c_fallback_frame = roi_c.copy() # 第一帧保底
+                else:
+                    if is_choice:
+                        c_empty_frames = 0 
+                        
+                        # 随时更新保底最高密度帧
+                        if density_c > c_max_den:
+                            c_max_den = density_c
+                            if not c_locked:
+                                c_fallback_frame = roi_c.copy()
+
+                        # 📷 快门逻辑：寻找绝对静止的那一刻
+                        if not c_locked:
+                            # 判定条件：误差小于 0.1% 视为静止 (屏蔽mp4压缩的微小像素抖动)
+                            if diff_score_c < 0.001:
+                                c_still_frames += 1
+                                # 连续 8 帧 (约 0.25 秒) 画面纹丝不动
+                                if c_still_frames >= 8:
+                                    c_best_frame = roi_c.copy() # 咔嚓！上锁！
+                                    c_locked = True
+                                    self.log(f"📸[选项快门] 发现完美静止画面，锁定！")
+                            else:
+                                # 只要动了一下（动画还没放完/玩家点了），重新倒数
+                                c_still_frames = 0
+                    else:
+                        # 选项消失了
+                        c_empty_frames += 1
+                        if c_empty_frames > 15: # 容忍 0.5 秒的消失动画
+                            c_active = False
+                            real_end_idx = idx - 15
+                            dur_c = (real_end_idx - c_start) / self.fps
                             
-                            target_lock_frame = int(self.fps * 0.5)
-                            if c_duration == target_lock_frame and not c_locked:
-                                c_best_frame = roi_c.copy()
-                                c_locked = True
-                                self.log("📸 [选项快门] 动画已稳定，成功锁定完美截图！")
+                            if dur_c > 0.5:
+                                st_c = datetime.timedelta(seconds=c_start / self.fps)
+                                et_c = datetime.timedelta(seconds=real_end_idx / self.fps)
+                                content_c = "Line [Choice]"
                                 
-                        else:
-                            c_empty_frames += 1
-                            if c_empty_frames > 15:
-                                c_active = False
-                                real_end_idx = idx - 15
-                                dur_c = (real_end_idx - c_start) / self.fps
+                                # 取图策略：如果成功锁定了静止帧就用静止帧，否则说明玩家手速太快，用保底最高密度帧
+                                target_frame = c_best_frame if c_locked else c_fallback_frame
                                 
-                                if dur_c > 0.5:
-                                    st_c = datetime.timedelta(seconds=c_start / self.fps)
-                                    et_c = datetime.timedelta(seconds=real_end_idx / self.fps)
-                                    content_c = "Line [Choice]"
-                                    
-                                    if do_ocr and c_best_frame is not None:
-                                        try:
-                                            text_c = self.processor.ocr_image(c_best_frame)
-                                            if text_c and len(text_c.strip()) >= 2:
-                                                content_c = f"{text_c.strip()} [Choice]"
-                                        except: pass
+                                if do_ocr and target_frame is not None:
+                                    try:
+                                        text_c = self.processor.ocr_image(target_frame)
+                                        if text_c and len(text_c.strip()) >= 2:
+                                            content_c = f"{text_c.strip()} [Choice]"
+                                    except: pass
 
-                                    is_merged_c = False
-                                    if len(subs) > 0:
-                                        last_sub = subs[-1]
-                                        if content_c != "Line [Choice]" and content_c == last_sub.content:
-                                            last_sub.end = et_c
-                                            is_merged_c = True
-                                            self.log(f"🔄 缝合选项碎片: {content_c[:10]}...")
+                                # 选项缝合
+                                is_merged_c = False
+                                if len(subs) > 0:
+                                    last_sub = subs[-1]
+                                    if content_c != "Line [Choice]" and content_c == last_sub.content:
+                                        last_sub.end = et_c
+                                        is_merged_c = True
+                                        self.log(f"🔄 缝合选项碎片: {content_c[:10]}...")
 
-                                    if not is_merged_c:
-                                        subs.append(srt.Subtitle(index=0, start=st_c, end=et_c, content=content_c))
-                                        self.log(f"🔹 选项结算: {content_c[:15]}...")
+                                if not is_merged_c:
+                                    subs.append(srt.Subtitle(index=0, start=st_c, end=et_c, content=content_c))
+                                    self.log(f"🔹 选项结算: {content_c[:15]}...")
 
                 idx += 1
 
